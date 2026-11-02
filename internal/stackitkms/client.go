@@ -314,7 +314,45 @@ func (s *STACKITSignerVerifier) CreateKey(ctx context.Context, algorithm string)
 }
 
 func (s *STACKITSignerVerifier) PublicKey(opts ...signature.PublicKeyOption) (crypto.PublicKey, error) {
-	panic("PublicKey() not implemented")
+	ctx := context.Background()
+	var err error
+	version := s.config.version
+	versionStr := ""
+
+	for _, opt := range opts {
+		opt.ApplyContext(&ctx)
+		opt.ApplyKeyVersion(&versionStr)
+	}
+
+	if versionStr != "" {
+		version, err = strconv.ParseInt(versionStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("bad version %q: %w", err)
+		}
+	}
+
+	keyRing, err := s.resolveKeyRing(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve keyring %q: %w", s.config.keyRingName, err)
+	}
+	key, err := s.resolveKey(ctx, keyRing.Id)
+	if err != nil {
+		return nil, fmt.Errorf("resolve key %q in keyring %q: %w", s.config.keyName, s.config.keyRingName, err)
+	}
+
+	var keyVersion *kms.Version
+	if version > 0 {
+		keyVersion, err = s.getVersion(ctx, keyRing.Id, key.Id, version)
+	} else {
+		keyVersion, err = s.getLatest(ctx, keyRing.Id, key.Id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get key version %q: %w", version, err)
+	}
+	if !keyVersion.HasPublicKey() {
+		return nil, fmt.Errorf("version has no public key: %w", ErrNotFound)
+	}
+	return parsePublicKey(keyVersion.GetPublicKey())
 }
 
 func (s *STACKITSignerVerifier) SignMessage(message io.Reader, opts ...signature.SignOption) ([]byte, error) {

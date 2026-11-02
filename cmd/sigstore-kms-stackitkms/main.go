@@ -1,17 +1,14 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
-	"github.com/paulmayer/sigstore-kms-stackit/internal/stackitkms"
+	"github.com/paulmayer/sigstore-kms-stackitkms/internal/stackitkms"
 	"github.com/sigstore/sigstore/pkg/signature/kms/cliplugin/handler"
 )
 
 const expectedProtocolVersion = "v1"
-
-var InvalidKeyResourceIDErr = errors.New("invalid key resource id, needs to be stackitkms://<projectid>/<regionid>/keyrings/<keyringname>/keys/<keyname>")
 
 func main() {
 	// follows example implementation patterns from

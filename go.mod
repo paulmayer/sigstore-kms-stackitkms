@@ -1,8 +1,9 @@
-module github.com/paulmayer/sigstore-kms-stackit
+module github.com/paulmayer/sigstore-kms-stackitkms
 
 go 1.27.0
 
 require (
+	github.com/sigstore/sigstore v1.8.10
 	github.com/sigstore/sigstore/pkg/signature/kms/cliplugin v0.0.0-20250207181959-4f6e90cf042e
 	github.com/stackitcloud/stackit-sdk-go/core v0.27.1
 	github.com/stackitcloud/stackit-sdk-go/services/kms v1.14.0
@@ -18,7 +19,6 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.9.0 // indirect
-	github.com/sigstore/sigstore v1.8.10 // indirect
 	github.com/titanous/rocacheck v0.0.0-20171023193734-afe73141d399 // indirect
 	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect
