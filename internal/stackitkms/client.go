@@ -533,11 +533,7 @@ func (s *STACKITSignerVerifier) VerifySignature(signature io.Reader, message io.
 		return err
 	}
 
-	supportedHashFunction, ok := supportedHashFunctions[key.Algorithm]
-	if !ok {
-		return fmt.Errorf("unsupported hash function %q: %w", ErrInvalidInput)
-	}
-	sigData, err := io.ReadAll(io.LimitReader(message, int64(supportedHashFunction.Size())))
+	sigData, err := io.ReadAll(io.LimitReader(signature, 1024))
 	if err != nil {
 		return fmt.Errorf("reading signature: %w", ErrInvalidInput)
 	}
