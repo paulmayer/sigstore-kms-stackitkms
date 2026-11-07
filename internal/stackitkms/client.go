@@ -22,16 +22,23 @@ import (
 
 const (
 	defaultAlgorithm          = string(kms.ALGORITHM_ECDSA_P256_SHA256)
-	defaultKeyRingDescription = "cosign keyring created by sigstore-kms-stackit"
-	defaultKeyDescription     = "cosign key created by sigstore-kms-stackit"
+	defaultKeyRingDescription = "cosign keyring created by sigstore-kms-stackitkms"
+	defaultKeyDescription     = "cosign key created by sigstore-kms-stackitkms"
 	defaultKeyProtection      = "software"
+	/*
+		STACKIT does not document the largest signing payload size, but it appears
+		to be 10MiB. Since it is base64 encoded, we use 3/4 of that as maximum
+		raw size.
+	*/
+	maxMessageBytes int64 = 7_864_319
 )
 
 var (
-	ErrNotFound     = errors.New("resource not found")
-	ErrAmbiguous    = errors.New("multiple matching resources found when expecting one")
-	ErrInvalidInput = errors.New("unsupported or invalid input")
-	ErrKeyExists    = errors.New("incompatible key exists")
+	ErrNotFound         = errors.New("resource not found")
+	ErrAmbiguous        = errors.New("multiple matching resources found when expecting one")
+	ErrInvalidInput     = errors.New("unsupported or invalid input")
+	ErrKeyExists        = errors.New("incompatible key exists")
+	ErrInvalidSignature = errors.New("invalid signature")
 
 	supportedAlgorithms = []string{
 		string(kms.ALGORITHM_ECDSA_P256_SHA256),
@@ -372,6 +379,11 @@ func (s *STACKITSignerVerifier) SignMessage(message io.Reader, opts ...signature
 		err            error
 		version        int64 = s.config.version
 		keyVersion     *kms.Version
+		/*
+			Remove digest once we can use digest-based signing. STACKIT KMS needs the raw
+			message at this point
+		*/
+		digest []byte // TODO: Remove once we can use digest-based signing (just use)
 	)
 
 	/*
@@ -383,6 +395,22 @@ func (s *STACKITSignerVerifier) SignMessage(message io.Reader, opts ...signature
 		opt.ApplyContext(&ctx)
 		opt.ApplyKeyVersion(&versionStr)
 		opt.ApplyKeyVersionUsed(&versionUsedStr)
+		opt.ApplyDigest(&digest) // TODO: Remove once we can use ComputeDigestForSigning
+	}
+
+	rawData, err := io.ReadAll(io.LimitReader(message, maxMessageBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading message: %w", err)
+	}
+	if int64(len(rawData)) > maxMessageBytes {
+		return nil, fmt.Errorf("input message too large: %w", ErrInvalidInput)
+	}
+	/*
+		if digest is not null, and the input message is empty, then we are in an unsupported
+		scenario.
+	*/
+	if len(rawData) == 0 && len(digest) > 0 {
+		return nil, fmt.Errorf("stackit kms does not support digest-based signing: %w", ErrInvalidInput)
 	}
 
 	// override version if provided via options
@@ -411,24 +439,23 @@ func (s *STACKITSignerVerifier) SignMessage(message io.Reader, opts ...signature
 	if err != nil {
 		return nil, err
 	}
-	supportedHashFunction, ok := supportedHashFunctions[key.GetAlgorithm()]
-	if !ok {
-		return nil, fmt.Errorf("failed to determine supported hash function for key %q in keyring %q", s.config.keyName, s.config.keyRingName)
-	}
 
 	/*
-		Here we can either pass signerOpts.HashFunc(), hoping that it returns the supported
-		hash function for the key, or just use supportedHashFunction to begin with.
-		For the time being, we use supportedHashFunction
+		TODO: Once STACKIT supports digest-based signing, uncomment the block below and remove
+		sections with TODOs above.
 	*/
-	digest, _, err := signature.ComputeDigestForSigning(message, supportedHashFunction, []crypto.Hash{supportedHashFunction}, opts...)
-	if err != nil {
-		return nil, err
-	}
+	// supportedHashFunction, ok := supportedHashFunctions[key.GetAlgorithm()]
+	// if !ok {
+	// 	return nil, fmt.Errorf("failed to determine supported hash function for key %q in keyring %q", s.config.keyName, s.config.keyRingName)
+	// }
+	// digest, _, err := signature.ComputeDigestForSigning(message, supportedHashFunction, []crypto.Hash{supportedHashFunction}, opts...)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	signedData, err := s.client.DefaultAPI.Sign(ctx, s.config.projectId, s.config.regionId, keyRing.Id, key.Id, keyVersion.Number).SignPayload(
 		kms.SignPayload{
-			Data: base64.StdEncoding.EncodeToString(digest),
+			Data: base64.StdEncoding.EncodeToString(rawData),
 		},
 	).Execute()
 	if err != nil {
@@ -447,7 +474,87 @@ func (s *STACKITSignerVerifier) SignMessage(message io.Reader, opts ...signature
 }
 
 func (s *STACKITSignerVerifier) VerifySignature(signature io.Reader, message io.Reader, opts ...signature.VerifyOption) error {
-	panic("VerifySignature() not implemented")
+	ctx := context.Background()
+	var (
+		versionStr         string
+		err                error
+		version            int64 = s.config.version
+		keyVersion         *kms.Version
+		digest             []byte // TODO: See SignMessage, same thing here
+		remoteVerification bool
+	)
+
+	for _, opt := range opts {
+		opt.ApplyContext(&ctx)
+		opt.ApplyKeyVersion(&versionStr)
+		opt.ApplyDigest(&digest)
+		opt.ApplyRemoteVerification(&remoteVerification)
+	}
+
+	rawData, err := io.ReadAll(io.LimitReader(message, maxMessageBytes+1))
+	if err != nil {
+		return fmt.Errorf("reading message: %w", err)
+	}
+	if int64(len(rawData)) > maxMessageBytes {
+		return fmt.Errorf("input message too large: %w", ErrInvalidInput)
+	}
+	/*
+		if digest is not null, and the input message is empty, then we are in an unsupported
+		scenario.
+	*/
+	if len(rawData) == 0 && len(digest) > 0 {
+		return fmt.Errorf("stackit kms does not support digest-based signing: %w", ErrInvalidInput)
+	}
+
+	// override version if provided via options
+	if versionStr != "" {
+		version, err = strconv.ParseInt(versionStr, 10, 64)
+		if err != nil {
+			return fmt.Errorf("bad version %q: %w", err)
+		}
+	}
+
+	// retrieve information about the key version to determine supported hash function
+	keyRing, err := s.resolveKeyRing(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve keyring %q: %w", s.config.keyRingName, err)
+	}
+	key, err := s.resolveKey(ctx, keyRing.Id)
+	if err != nil {
+		return fmt.Errorf("resolve key %q in keyring %q: %w", s.config.keyName, s.config.keyRingName, err)
+	}
+
+	if version > 0 {
+		keyVersion, err = s.getVersion(ctx, keyRing.Id, key.Id, version)
+	} else {
+		keyVersion, err = s.getLatest(ctx, keyRing.Id, key.Id)
+	}
+	if err != nil {
+		return err
+	}
+
+	supportedHashFunction, ok := supportedHashFunctions[key.Algorithm]
+	if !ok {
+		return fmt.Errorf("unsupported hash function %q: %w", ErrInvalidInput)
+	}
+	sigData, err := io.ReadAll(io.LimitReader(message, int64(supportedHashFunction.Size())))
+	if err != nil {
+		return fmt.Errorf("reading signature: %w", ErrInvalidInput)
+	}
+
+	signedData, err := s.client.DefaultAPI.Verify(ctx, s.config.projectId, s.config.regionId, keyRing.Id, key.Id, keyVersion.Number).VerifyPayload(
+		kms.VerifyPayload{
+			Data:      base64.StdEncoding.EncodeToString(rawData),
+			Signature: base64.StdEncoding.EncodeToString(sigData),
+		},
+	).Execute()
+	if err != nil {
+		return fmt.Errorf("verifying signature: %w", err)
+	}
+	if !signedData.Valid {
+		return ErrInvalidSignature
+	}
+	return nil
 }
 
 func (s *STACKITSignerVerifier) CryptoSigner(ctx context.Context, errFunc func(error)) (crypto.Signer, crypto.SignerOpts, error) {
