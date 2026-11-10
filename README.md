@@ -1,5 +1,5 @@
-sigstore-kms-stackit
-====================
+sigstore-kms-stackitkms
+=======================
 
 Minimal [sigstore][ss] KMS Plugin implementation for [STACKIT KMS][sk].
 
